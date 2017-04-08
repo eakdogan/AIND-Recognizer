@@ -77,23 +77,67 @@ class SelectorBIC(ModelSelector):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
         # TODO implement model selection based on BIC scores
-        raise NotImplementedError
+
+        """Initialize the variables to hold values"""
+        candidateModel = None
+        candidateBIC = float('inf')
+
+        """Loop for optimal BIC value and model"""
+        for n in range(self.min_n_components, self.max_n_components+1):
+            logL = None
+            model = self.base_model(n)
+            if model is None:
+                continue
+            try:  # hmmlearn stability issues
+                logL = model.score(self.X, self.lengths)
+            except:
+                continue
+            BIC = -2 * logL + (n**2 + (2 * len(self.X[0]) * n)) * np.log(len(self.X))
+            if  BIC < candidateBIC:
+                candidateBIC = BIC
+                candidateModel = model
+        return candidateModel
+
 
 
 class SelectorDIC(ModelSelector):
-    ''' select best model based on Discriminative Information Criterion
-
+    """ select best model based on Discriminative Information Criterion
     Biem, Alain. "A model selection criterion for classification: Application to hmm topology optimization."
     Document Analysis and Recognition, 2003. Proceedings. Seventh International Conference on. IEEE, 2003.
-    http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.58.6208&rep=rep1&type=pdf
-    DIC = log(P(X(i)) - 1/(M-1)SUM(log(P(X(all but i))
-    '''
+    http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.58.6208&rep=rep1&type=pdf DIC = log(P(X(i)) - 1/(M-1)SUM(log(P(X(all but i))
+    """
 
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
-
         # TODO implement model selection based on DIC scores
-        raise NotImplementedError
+        candidateDIC = float('-inf')
+        candidateModel = None
+
+        for n in range(self.min_n_components, self.max_n_components+1):
+            M = 1.0
+            try:
+                model = self.base_model(n)
+                LogL0 = model.score(self.X, self.lengths)
+            except:
+                continue
+
+            logsum = 0
+            for word in self.hwords.keys():
+                if word != self.this_word:
+                    x2, l2 = self.hwords[word]
+                    try:
+                        wordlsum = model.score(x2, l2)
+                        M = M + 1.0
+                    except:
+                        wordlsum = 0
+                    logsum += wordlsum
+
+            newDIC = LogL0 - (1/(M-1)) * logsum * 1.0
+
+            if newDIC > candidateDIC:
+                candidateDIC = newDIC
+                candidateModel = model
+        return candidateModel
 
 
 class SelectorCV(ModelSelector):
@@ -105,4 +149,42 @@ class SelectorCV(ModelSelector):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
         # TODO implement model selection using CV
-        raise NotImplementedError
+        split_method = KFold(n_splits = min(len(self.lengths),3))
+        CandidateLL_avg = -float('Inf')
+        CandidateModel = None
+
+        """loop with range of states, find avg logl. divide and run test, train on data sets.
+        """
+
+        newModel = None
+        for n in range(self.min_n_components, self.max_n_components + 1):
+            LLSum = 0
+            LLcount = 1
+            matchModel = None
+            for CVtrain, CVtest in split_method.split(self.sequences):
+
+                Xtrain, Xtest = [],[]
+                for test in CVtest:
+                    Xtest += self.sequences[test]
+                for train in CVtrain:
+                    Xtrain += self.sequences[train]
+
+                Xtrain, Xtest = np.array(Xtrain), np.array(Xtest)
+                train_length, test_length = np.array(self.lengths)[CVtrain], np.array(self.lengths)[CVtest]
+
+                try:
+                    matchModel = GaussianHMM(n_components=n, covariance_type="diag", n_iter=1000,
+                                               random_state=self.random_state, verbose=False).fit(Xtrain, train_length)
+                    LogL = matchModel.score(Xtest, test_length)
+                    LLcount += 1
+                except:
+                    LogL = 0
+                LLSum += LogL
+
+            LLAvgLocal = LLSum/(LLcount*1.0)
+
+            if LLAvgLocal>CandidateLL_avg:
+                CandidateLL_avg = LLAvgLocal
+                CandidateModel = matchModel
+
+        return CandidateModel
